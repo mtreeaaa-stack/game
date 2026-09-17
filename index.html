@@ -175,7 +175,17 @@
   let matchedCount = 0;
   let totalPairs = 0;
   let wrongAttempts = 0;
-  let finishedRounds = 0;
+  // 三个模式分开计数
+  let finishedNorm = 0;
+  let finishedMeaning = 0;
+  let finishedContext = 0;
+  
+  function getFinishedRounds() {
+    if (currentMode === 'norm') return finishedNorm;
+    if (currentMode === 'idiom-meaning') return finishedMeaning;
+    if (currentMode === 'idiom-context') return finishedContext;
+    return 0;
+  }
 
   // 已抽过的题（Set，key 用内容做唯一标识）
   const seenNorm = new Set();
@@ -308,7 +318,7 @@
     totalCountEl.textContent = totalPairs;
     wrongCountEl.textContent = wrongAttempts;
     const finishedEl = document.getElementById('finishedRounds');
-    if (finishedEl) finishedEl.textContent = finishedRounds;
+    if (finishedEl) finishedEl.textContent = getFinishedRounds();
 
     // 显示当前模式剩余未抽题数
     if (remainingCountEl) {
@@ -453,7 +463,13 @@
       clearSelected();
 
       if (matchedCount === totalPairs) {
-        finishedRounds++;
+        if (currentMode === 'norm') {
+          finishedNorm++;
+        } else if (currentMode === 'idiom-meaning') {
+          finishedMeaning++;
+        } else if (currentMode === 'idiom-context') {
+          finishedContext++;
+        }
         updateStats();
       }
       showToast(matchedCount === totalPairs ? '🎉 太棒了！全部连对！' : '✓ 正确！', matchedCount === totalPairs ? 2000 : 1000);
@@ -490,8 +506,14 @@
   function resetPool() {
     if (currentMode === 'norm') {
       seenNorm.clear();
+      finishedNorm = 0;      // ← 加这一行
     } else {
       seenIdiom.clear();
+      if (currentMode === 'idiom-meaning') {
+        finishedMeaning = 0; // ← 加这一行
+      } else {
+        finishedContext = 0; // ← 加这一行
+      }
     }
     updateStats();
     showToast('♻️ 题库已重置，重新开始抽题');
