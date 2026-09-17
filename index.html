@@ -152,7 +152,7 @@
   <div class="board" id="board"></div>
   <div class="footer-actions">
     <button class="btn" id="resetBtn">🔄 重连</button>
-	<span class="progress-text" id="progressText">点击左右项连线</span>
+    <span class="progress-text" id="progressText">点击左右项连线</span>
     <button class="btn" id="resetPoolBtn">♻️ 重置题库</button>
     <button class="btn" id="clearAllBtn">🧹 清空进度</button>
     <button class="btn btn-primary" id="nextBtn">下一组 →</button>
@@ -165,7 +165,7 @@
 <!-- 游戏主逻辑 -->
 <script>
   // ============================================================
-  // 游戏逻辑（带 localStorage 持久化）
+  // 游戏逻辑（只保存「已答完」的题，刷新不浪费题）
   // ============================================================
 
   // ---- 从 localStorage 读取进度 ----
@@ -265,6 +265,7 @@
     return arr;
   }
 
+  // 抽题：优先从「没答过」的题里抽
   function pickPairs(data, count = 6, seenSet = null) {
     if (data.length <= count) return [...data];
 
@@ -295,6 +296,7 @@
     return context.replace(reg, '<span class="blank">____</span>');
   }
 
+  // 根据模式加载数据（★ 抽题时不再标记 seen）
   function loadModeData(mode) {
     let pairs = [];
     let seenSet = null;
@@ -316,28 +318,28 @@
     const selected = pickPairs(dataSource, 6, seenSet);
 
     if (mode === 'norm') {
-      selected.forEach(item => seenSet.add(getKey(item)));
       pairs = selected.map((item, idx) => ({
         id: `norm-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 6)}`,
         left: item.left,
         right: item.right,
-        isHtmlRight: false
+        isHtmlRight: false,
+        originalKey: getKey(item)   // ★ 保存原始 key，答完时才标记
       }));
     } else if (mode === 'idiom-meaning') {
-      selected.forEach(item => seenSet.add(getKey(item)));
       pairs = selected.map((item, idx) => ({
         id: `idiom-m-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 6)}`,
         left: item.idiom,
         right: item.meaning,
-        isHtmlRight: false
+        isHtmlRight: false,
+        originalKey: getKey(item)
       }));
     } else if (mode === 'idiom-context') {
-      selected.forEach(item => seenSet.add(getKey(item)));
       pairs = selected.map((item, idx) => ({
         id: `idiom-c-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 6)}`,
         left: item.idiom,
         right: maskIdiomInContext(item.idiom, item.context),
-        isHtmlRight: true
+        isHtmlRight: true,
+        originalKey: getKey(item)
       }));
     }
 
@@ -347,8 +349,7 @@
     wrongAttempts = 0;
     selectedSide = null;
     selectedIndex = -1;
-
-    saveProgress();   // ★ 每次抽题后保存
+    // ★ 注意：这里不再调用 saveProgress()
     updateStats();
   }
 
@@ -372,9 +373,11 @@
       remainingCountEl.textContent = Math.max(0, dataLen - seenLen);
     }
 
-    progressText.textContent = matchedCount === totalPairs
-      ? '🎉 全部连对！点击下一组继续'
-      : '点击左右项进行连线';
+    if (progressText) {
+      progressText.textContent = matchedCount === totalPairs
+        ? '🎉 全部连对！点击下一组继续'
+        : '点击左右项进行连线';
+    }
   }
 
   function clearSelected() {
@@ -501,7 +504,20 @@
       updateStats();
       clearSelected();
 
+      // ★ 整组全部连对 → 标记 seen，加分，保存
       if (matchedCount === totalPairs) {
+        // 把这 6 道题加入 seen
+        currentPairs.forEach(p => {
+          if (p.originalKey) {
+            if (currentMode === 'norm') {
+              seenNorm.add(p.originalKey);
+            } else {
+              seenIdiom.add(p.originalKey);
+            }
+          }
+        });
+
+        // 完成组数 +1
         if (currentMode === 'norm') {
           finishedNorm++;
         } else if (currentMode === 'idiom-meaning') {
@@ -509,7 +525,9 @@
         } else if (currentMode === 'idiom-context') {
           finishedContext++;
         }
-        saveProgress();   // ★ 全连对后保存
+
+        // ★ 保存进度
+        saveProgress();
         updateStats();
       }
       showToast(matchedCount === totalPairs ? '🎉 太棒了！全部连对！' : '✓ 正确！', matchedCount === totalPairs ? 2000 : 1000);
@@ -542,6 +560,7 @@
     clearSelected();
   }
 
+  // ♻️ 重置题库：只清空「当前模式」的已答题记录 + 完成数
   function resetPool() {
     if (currentMode === 'norm') {
       seenNorm.clear();
@@ -560,7 +579,7 @@
     loadNext();
   }
 
-  // ★ 清空所有进度
+  // 🧹 清空所有进度
   function clearAllProgress() {
     if (!confirm('确定要清空所有进度吗？\n（已完成组数、已抽过的题都会归零）')) return;
     localStorage.removeItem('lq_currentMode');
@@ -578,12 +597,11 @@
     modeBtns.forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === mode);
     });
-    saveProgress();   // ★ 切换模式后保存
+    saveProgress();
     loadNext();
   }
 
   function init() {
-    // 根据保存的模式设置按钮状态
     modeBtns.forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === currentMode);
       btn.addEventListener('click', (e) => switchMode(e.target.dataset.mode));
