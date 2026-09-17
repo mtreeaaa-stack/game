@@ -44,9 +44,10 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     }
     .stats {
-      display: flex; gap: 12px; font-size: 0.8rem;
-      background: #eef2f6; padding: 6px 14px; border-radius: 40px;
+      display: flex; gap: 10px; font-size: 0.75rem;
+      background: #eef2f6; padding: 6px 12px; border-radius: 40px;
       color: #2c3e50; font-weight: 500; flex-shrink: 0; margin-top: 8px;
+      flex-wrap: wrap;
     }
     .stats span { display: flex; align-items: center; gap: 4px; }
     .board {
@@ -97,22 +98,23 @@
     .footer-actions {
       display: flex; justify-content: space-between; align-items: center;
       padding-top: 12px; border-top: 1px solid #eef1f5;
-      flex-shrink: 0; gap: 10px;
+      flex-shrink: 0; gap: 8px;
     }
     .btn {
       background: #ffffff; border: 1.5px solid #d1d9e6;
-      border-radius: 40px; padding: 10px 18px;
-      font-size: 0.85rem; font-weight: 600; color: #1e2b3c;
-      display: flex; align-items: center; gap: 6px;
+      border-radius: 40px; padding: 10px 14px;
+      font-size: 0.8rem; font-weight: 600; color: #1e2b3c;
+      display: flex; align-items: center; gap: 4px;
       transition: all 0.15s; cursor: pointer;
       box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+      white-space: nowrap;
     }
     .btn:active { background: #f1f5f9; transform: scale(0.97); }
     .btn-primary {
       background: #1e2b3c; border-color: #1e2b3c; color: #ffffff;
     }
     .btn-primary:active { background: #0f1a26; }
-    .progress-text { font-size: 0.75rem; color: #64748b; font-weight: 500; }
+    .progress-text { font-size: 0.72rem; color: #64748b; font-weight: 500; }
     .toast {
       position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
       background: #1e2b3c; color: white; padding: 10px 22px;
@@ -143,18 +145,20 @@
   <div class="stats" id="stats">
     <span>🔗 已连 <span id="matchedCount">0</span>/<span id="totalCount">0</span></span>
     <span>🎯 错误 <span id="wrongCount">0</span></span>
-	<span>✅ 完成 <span id="finishedRounds">0</span> 组</span>
+    <span>✅ 完成 <span id="finishedRounds">0</span> 组</span>
+    <span title="当前模式未抽过的题数">🆕 余 <span id="remainingCount">-</span></span>
   </div>
   <div class="board" id="board"></div>
   <div class="footer-actions">
     <button class="btn" id="resetBtn">🔄 重连</button>
-    <span class="progress-text" id="progressText">点击左右项连线</span>
+	<span class="progress-text" id="progressText">点击左右项连线</span>
+    <button class="btn" id="resetPoolBtn">♻️ 重置题库</button>
     <button class="btn btn-primary" id="nextBtn">下一组 →</button>
   </div>
 </div>
 <div class="toast" id="toast"></div>
 
-<!-- 先引入数据文件 -->
+<!-- 数据文件 -->
 <script src="data.js"></script>
 <!-- 游戏主逻辑 -->
 <script>
@@ -162,11 +166,7 @@
   // 游戏逻辑
   // ============================================================
 
-  // 从 window 读取 data.js 里的数据（如果没读到，给个空数组防御）
-  //const NORM_DATA = window.NORM_DATA || [];
-  //const IDIOM_DATA = window.IDIOM_DATA || [];
-
-  let currentMode = 'norm';  // 'norm' | 'idiom-meaning' | 'idiom-context'
+  let currentMode = 'norm';
   let currentPairs = [];
   let leftItems = [];
   let rightItems = [];
@@ -175,15 +175,25 @@
   let matchedCount = 0;
   let totalPairs = 0;
   let wrongAttempts = 0;
-  // 已完成组数（持久化保存）
-  let finishedRounds = parseInt(localStorage.getItem('finishedRounds') || '0', 10);
+  let finishedRounds = 0;
+
+  // 已抽过的题（Set，key 用内容做唯一标识）
+  const seenNorm = new Set();
+  const seenIdiom = new Set();
+
+  function getKey(item) {
+    // 规范词用 left，成语用 idiom
+    return item.left || item.idiom || JSON.stringify(item);
+  }
 
   const boardEl = document.getElementById('board');
   const matchedCountEl = document.getElementById('matchedCount');
   const totalCountEl = document.getElementById('totalCount');
   const wrongCountEl = document.getElementById('wrongCount');
+  const remainingCountEl = document.getElementById('remainingCount');
   const progressText = document.getElementById('progressText');
   const resetBtn = document.getElementById('resetBtn');
+  const resetPoolBtn = document.getElementById('resetPoolBtn');
   const nextBtn = document.getElementById('nextBtn');
   const toastEl = document.getElementById('toast');
   const modeBtns = document.querySelectorAll('.mode-btn');
@@ -203,8 +213,30 @@
     return arr;
   }
 
-  function pickPairs(data, count = 6) {
+  // 核心：优先从「没抽过」的题里抽
+  function pickPairs(data, count = 6, seenSet = null) {
     if (data.length <= count) return [...data];
+
+    // 如果传了 seenSet 且已经抽完一轮，自动清空重来
+    if (seenSet && seenSet.size >= data.length) {
+      seenSet.clear();
+    }
+
+    if (seenSet) {
+      const fresh = data.filter(item => !seenSet.has(getKey(item)));
+      if (fresh.length >= count) {
+        return shuffleArray([...fresh]).slice(0, count);
+      } else {
+        // 没抽过的不够 → 先用没抽过的，再补一些抽过的
+        const rest = data.filter(item => seenSet.has(getKey(item)));
+        const picked = [
+          ...fresh,
+          ...shuffleArray([...rest]).slice(0, count - fresh.length)
+        ];
+        return shuffleArray(picked);
+      }
+    }
+
     return shuffleArray([...data]).slice(0, count);
   }
 
@@ -218,13 +250,26 @@
   // 根据模式加载数据
   function loadModeData(mode) {
     let pairs = [];
+    let seenSet = null;
+    let dataSource = null;
 
     if (mode === 'norm') {
-      if (NORM_DATA.length === 0) {
-        showToast('⚠️ 规范词数据为空，请检查 data.js');
-        return;
-      }
-      const selected = pickPairs(NORM_DATA, 6);
+      dataSource = NORM_DATA;
+      seenSet = seenNorm;
+    } else {
+      dataSource = IDIOM_DATA;
+      seenSet = seenIdiom;
+    }
+
+    if (dataSource.length === 0) {
+      showToast('⚠️ 数据为空，请检查 data.js');
+      return;
+    }
+
+    const selected = pickPairs(dataSource, 6, seenSet);
+
+    if (mode === 'norm') {
+      selected.forEach(item => seenSet.add(getKey(item)));
       pairs = selected.map((item, idx) => ({
         id: `norm-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 6)}`,
         left: item.left,
@@ -232,11 +277,7 @@
         isHtmlRight: false
       }));
     } else if (mode === 'idiom-meaning') {
-      if (IDIOM_DATA.length === 0) {
-        showToast('⚠️ 成语数据为空，请检查 data.js');
-        return;
-      }
-      const selected = pickPairs(IDIOM_DATA, 6);
+      selected.forEach(item => seenSet.add(getKey(item)));
       pairs = selected.map((item, idx) => ({
         id: `idiom-m-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 6)}`,
         left: item.idiom,
@@ -244,11 +285,7 @@
         isHtmlRight: false
       }));
     } else if (mode === 'idiom-context') {
-      if (IDIOM_DATA.length === 0) {
-        showToast('⚠️ 成语数据为空，请检查 data.js');
-        return;
-      }
-      const selected = pickPairs(IDIOM_DATA, 6);
+      selected.forEach(item => seenSet.add(getKey(item)));
       pairs = selected.map((item, idx) => ({
         id: `idiom-c-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 6)}`,
         left: item.idiom,
@@ -270,10 +307,22 @@
     matchedCountEl.textContent = matchedCount;
     totalCountEl.textContent = totalPairs;
     wrongCountEl.textContent = wrongAttempts;
-    // 显示已完成组数
     const finishedEl = document.getElementById('finishedRounds');
     if (finishedEl) finishedEl.textContent = finishedRounds;
-  
+
+    // 显示当前模式剩余未抽题数
+    if (remainingCountEl) {
+      let dataLen = 0, seenLen = 0;
+      if (currentMode === 'norm') {
+        dataLen = NORM_DATA.length;
+        seenLen = seenNorm.size;
+      } else {
+        dataLen = IDIOM_DATA.length;
+        seenLen = seenIdiom.size;
+      }
+      remainingCountEl.textContent = Math.max(0, dataLen - seenLen);
+    }
+
     progressText.textContent = matchedCount === totalPairs
       ? '🎉 全部连对！点击下一组继续'
       : '点击左右项进行连线';
@@ -402,12 +451,11 @@
       matchedCount++;
       updateStats();
       clearSelected();
-	  // 如果这一组全部连对，完成组数 +1
-	  if (matchedCount === totalPairs) {
-	    finishedRounds++;
-	    localStorage.setItem('finishedRounds', finishedRounds);
-	    updateStats();
-	  }
+
+      if (matchedCount === totalPairs) {
+        finishedRounds++;
+        updateStats();
+      }
       showToast(matchedCount === totalPairs ? '🎉 太棒了！全部连对！' : '✓ 正确！', matchedCount === totalPairs ? 2000 : 1000);
     } else {
       wrongAttempts++;
@@ -438,6 +486,18 @@
     clearSelected();
   }
 
+  // 手动重置题库：清空已抽过的记录
+  function resetPool() {
+    if (currentMode === 'norm') {
+      seenNorm.clear();
+    } else {
+      seenIdiom.clear();
+    }
+    updateStats();
+    showToast('♻️ 题库已重置，重新开始抽题');
+    loadNext();
+  }
+
   function switchMode(mode) {
     if (currentMode === mode) return;
     currentMode = mode;
@@ -452,6 +512,7 @@
       btn.addEventListener('click', (e) => switchMode(e.target.dataset.mode));
     });
     resetBtn.addEventListener('click', resetCurrent);
+    resetPoolBtn.addEventListener('click', resetPool);
     nextBtn.addEventListener('click', loadNext);
     loadModeData('norm');
     renderBoard();
