@@ -98,12 +98,13 @@
     .footer-actions {
       display: flex; justify-content: space-between; align-items: center;
       padding-top: 12px; border-top: 1px solid #eef1f5;
-      flex-shrink: 0; gap: 8px;
+      flex-shrink: 0; gap: 6px;
+      flex-wrap: wrap;
     }
     .btn {
       background: #ffffff; border: 1.5px solid #d1d9e6;
-      border-radius: 40px; padding: 10px 14px;
-      font-size: 0.8rem; font-weight: 600; color: #1e2b3c;
+      border-radius: 40px; padding: 8px 12px;
+      font-size: 0.75rem; font-weight: 600; color: #1e2b3c;
       display: flex; align-items: center; gap: 4px;
       transition: all 0.15s; cursor: pointer;
       box-shadow: 0 2px 6px rgba(0,0,0,0.02);
@@ -153,6 +154,7 @@
     <button class="btn" id="resetBtn">🔄 重连</button>
 	<span class="progress-text" id="progressText">点击左右项连线</span>
     <button class="btn" id="resetPoolBtn">♻️ 重置题库</button>
+    <button class="btn" id="clearAllBtn">🧹 清空进度</button>
     <button class="btn btn-primary" id="nextBtn">下一组 →</button>
   </div>
 </div>
@@ -163,10 +165,35 @@
 <!-- 游戏主逻辑 -->
 <script>
   // ============================================================
-  // 游戏逻辑
+  // 游戏逻辑（带 localStorage 持久化）
   // ============================================================
 
-  let currentMode = 'norm';
+  // ---- 从 localStorage 读取进度 ----
+  function loadProgress() {
+    try {
+      return {
+        currentMode: localStorage.getItem('lq_currentMode') || 'norm',
+        finishedNorm: parseInt(localStorage.getItem('lq_finishedNorm') || '0', 10),
+        finishedMeaning: parseInt(localStorage.getItem('lq_finishedMeaning') || '0', 10),
+        finishedContext: parseInt(localStorage.getItem('lq_finishedContext') || '0', 10),
+        seenNorm: new Set(JSON.parse(localStorage.getItem('lq_seenNorm') || '[]')),
+        seenIdiom: new Set(JSON.parse(localStorage.getItem('lq_seenIdiom') || '[]'))
+      };
+    } catch (e) {
+      return {
+        currentMode: 'norm',
+        finishedNorm: 0,
+        finishedMeaning: 0,
+        finishedContext: 0,
+        seenNorm: new Set(),
+        seenIdiom: new Set()
+      };
+    }
+  }
+
+  const progress = loadProgress();
+
+  let currentMode = progress.currentMode;
   let currentPairs = [];
   let leftItems = [];
   let rightItems = [];
@@ -175,11 +202,16 @@
   let matchedCount = 0;
   let totalPairs = 0;
   let wrongAttempts = 0;
+
   // 三个模式分开计数
-  let finishedNorm = 0;
-  let finishedMeaning = 0;
-  let finishedContext = 0;
-  
+  let finishedNorm = progress.finishedNorm;
+  let finishedMeaning = progress.finishedMeaning;
+  let finishedContext = progress.finishedContext;
+
+  // 已抽过的题
+  const seenNorm = progress.seenNorm;
+  const seenIdiom = progress.seenIdiom;
+
   function getFinishedRounds() {
     if (currentMode === 'norm') return finishedNorm;
     if (currentMode === 'idiom-meaning') return finishedMeaning;
@@ -187,12 +219,21 @@
     return 0;
   }
 
-  // 已抽过的题（Set，key 用内容做唯一标识）
-  const seenNorm = new Set();
-  const seenIdiom = new Set();
+  // ---- 保存进度 ----
+  function saveProgress() {
+    try {
+      localStorage.setItem('lq_currentMode', currentMode);
+      localStorage.setItem('lq_finishedNorm', finishedNorm);
+      localStorage.setItem('lq_finishedMeaning', finishedMeaning);
+      localStorage.setItem('lq_finishedContext', finishedContext);
+      localStorage.setItem('lq_seenNorm', JSON.stringify([...seenNorm]));
+      localStorage.setItem('lq_seenIdiom', JSON.stringify([...seenIdiom]));
+    } catch (e) {
+      console.warn('保存进度失败', e);
+    }
+  }
 
   function getKey(item) {
-    // 规范词用 left，成语用 idiom
     return item.left || item.idiom || JSON.stringify(item);
   }
 
@@ -204,6 +245,7 @@
   const progressText = document.getElementById('progressText');
   const resetBtn = document.getElementById('resetBtn');
   const resetPoolBtn = document.getElementById('resetPoolBtn');
+  const clearAllBtn = document.getElementById('clearAllBtn');
   const nextBtn = document.getElementById('nextBtn');
   const toastEl = document.getElementById('toast');
   const modeBtns = document.querySelectorAll('.mode-btn');
@@ -223,11 +265,9 @@
     return arr;
   }
 
-  // 核心：优先从「没抽过」的题里抽
   function pickPairs(data, count = 6, seenSet = null) {
     if (data.length <= count) return [...data];
 
-    // 如果传了 seenSet 且已经抽完一轮，自动清空重来
     if (seenSet && seenSet.size >= data.length) {
       seenSet.clear();
     }
@@ -237,7 +277,6 @@
       if (fresh.length >= count) {
         return shuffleArray([...fresh]).slice(0, count);
       } else {
-        // 没抽过的不够 → 先用没抽过的，再补一些抽过的
         const rest = data.filter(item => seenSet.has(getKey(item)));
         const picked = [
           ...fresh,
@@ -250,14 +289,12 @@
     return shuffleArray([...data]).slice(0, count);
   }
 
-  // 把例句中的成语替换成下划线遮盖
   function maskIdiomInContext(idiom, context) {
     const escaped = idiom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const reg = new RegExp(escaped, 'g');
     return context.replace(reg, '<span class="blank">____</span>');
   }
 
-  // 根据模式加载数据
   function loadModeData(mode) {
     let pairs = [];
     let seenSet = null;
@@ -310,6 +347,8 @@
     wrongAttempts = 0;
     selectedSide = null;
     selectedIndex = -1;
+
+    saveProgress();   // ★ 每次抽题后保存
     updateStats();
   }
 
@@ -317,10 +356,10 @@
     matchedCountEl.textContent = matchedCount;
     totalCountEl.textContent = totalPairs;
     wrongCountEl.textContent = wrongAttempts;
+
     const finishedEl = document.getElementById('finishedRounds');
     if (finishedEl) finishedEl.textContent = getFinishedRounds();
 
-    // 显示当前模式剩余未抽题数
     if (remainingCountEl) {
       let dataLen = 0, seenLen = 0;
       if (currentMode === 'norm') {
@@ -470,6 +509,7 @@
         } else if (currentMode === 'idiom-context') {
           finishedContext++;
         }
+        saveProgress();   // ★ 全连对后保存
         updateStats();
       }
       showToast(matchedCount === totalPairs ? '🎉 太棒了！全部连对！' : '✓ 正确！', matchedCount === totalPairs ? 2000 : 1000);
@@ -502,22 +542,34 @@
     clearSelected();
   }
 
-  // 手动重置题库：清空已抽过的记录
   function resetPool() {
     if (currentMode === 'norm') {
       seenNorm.clear();
-      finishedNorm = 0;      // ← 加这一行
+      finishedNorm = 0;
     } else {
       seenIdiom.clear();
       if (currentMode === 'idiom-meaning') {
-        finishedMeaning = 0; // ← 加这一行
+        finishedMeaning = 0;
       } else {
-        finishedContext = 0; // ← 加这一行
+        finishedContext = 0;
       }
     }
+    saveProgress();
     updateStats();
-    showToast('♻️ 题库已重置，重新开始抽题');
+    showToast('♻️ 当前模式题库已重置');
     loadNext();
+  }
+
+  // ★ 清空所有进度
+  function clearAllProgress() {
+    if (!confirm('确定要清空所有进度吗？\n（已完成组数、已抽过的题都会归零）')) return;
+    localStorage.removeItem('lq_currentMode');
+    localStorage.removeItem('lq_finishedNorm');
+    localStorage.removeItem('lq_finishedMeaning');
+    localStorage.removeItem('lq_finishedContext');
+    localStorage.removeItem('lq_seenNorm');
+    localStorage.removeItem('lq_seenIdiom');
+    location.reload();
   }
 
   function switchMode(mode) {
@@ -526,17 +578,22 @@
     modeBtns.forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === mode);
     });
+    saveProgress();   // ★ 切换模式后保存
     loadNext();
   }
 
   function init() {
+    // 根据保存的模式设置按钮状态
     modeBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === currentMode);
       btn.addEventListener('click', (e) => switchMode(e.target.dataset.mode));
     });
     resetBtn.addEventListener('click', resetCurrent);
     resetPoolBtn.addEventListener('click', resetPool);
+    clearAllBtn.addEventListener('click', clearAllProgress);
     nextBtn.addEventListener('click', loadNext);
-    loadModeData('norm');
+
+    loadModeData(currentMode);
     renderBoard();
   }
 
