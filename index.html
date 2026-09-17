@@ -143,6 +143,7 @@
   <div class="stats" id="stats">
     <span>🔗 已连 <span id="matchedCount">0</span>/<span id="totalCount">0</span></span>
     <span>🎯 错误 <span id="wrongCount">0</span></span>
+	<span>✅ 完成 <span id="finishedRounds">0</span> 组</span>
   </div>
   <div class="board" id="board"></div>
   <div class="footer-actions">
@@ -174,6 +175,8 @@
   let matchedCount = 0;
   let totalPairs = 0;
   let wrongAttempts = 0;
+  // 已完成组数（持久化保存）
+  let finishedRounds = parseInt(localStorage.getItem('finishedRounds') || '0', 10);
 
   const boardEl = document.getElementById('board');
   const matchedCountEl = document.getElementById('matchedCount');
@@ -267,6 +270,10 @@
     matchedCountEl.textContent = matchedCount;
     totalCountEl.textContent = totalPairs;
     wrongCountEl.textContent = wrongAttempts;
+    // 显示已完成组数
+    const finishedEl = document.getElementById('finishedRounds');
+    if (finishedEl) finishedEl.textContent = finishedRounds;
+  
     progressText.textContent = matchedCount === totalPairs
       ? '🎉 全部连对！点击下一组继续'
       : '点击左右项进行连线';
@@ -395,6 +402,12 @@
       matchedCount++;
       updateStats();
       clearSelected();
+	  // 如果这一组全部连对，完成组数 +1
+	  if (matchedCount === totalPairs) {
+	    finishedRounds++;
+	    localStorage.setItem('finishedRounds', finishedRounds);
+	    updateStats();
+	  }
       showToast(matchedCount === totalPairs ? '🎉 太棒了！全部连对！' : '✓ 正确！', matchedCount === totalPairs ? 2000 : 1000);
     } else {
       wrongAttempts++;
